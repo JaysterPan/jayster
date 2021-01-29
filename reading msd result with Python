@@ -1,0 +1,146 @@
+# -*- coding:utf-8 -*-
+import re
+import numpy as np
+import matplotlib.pyplot as plt
+from numpy import polyfit, poly1d, mean
+
+file_name= "log_0mpa_285k.lammps"     # log name
+jump_step= 145                        # jump the headline
+max_lines= 1000000                    # 1000000 is large enough
+
+# Regular matching output parameters, one output one "\s+[0-9\.]+" or "\s+[-?0-9\.]" for negtive values
+# example:
+# step     temp       pot         press       density    vol        c_namsd[4] c_clmsd[4]
+# 3810800  278.25153  -15214.203  -983.53387  1.0297762  37764.654  1345.8036  1403.2868
+
+patten= r'(\s+[-?0-9\.]+\s+[-?0-9\.]+\s+[-?0-9\.]+\s+[-?0-9\.]+\s+[-?0-9\.]+\s+[-?0-9\.]+\s+[-?0-9\.]+\s+[-?0-9\.])'
+
+f = open(file_name,"r")
+data = np.zeros((8,max_lines))  # depands on how many thermo outputs
+
+count=-1
+sumtemp=0
+sumpress=0
+sumvol=0
+for i in range(1,max_lines):
+    line = f.readline()
+    #print(line)
+    if re.match(r'(Total wall)', line) != None:
+        break
+    match= re.match(patten, line)
+    if match != None:
+        # print(match.groups())
+        count= count+ 1
+        match= re.findall(r'([-?0-9\.]+)', line)
+        data[0, count]= int(match[0])            # step
+        data[1, count]= float(match[1])          # temp
+        data[2, count]= float(match[2])          # PotEng
+        data[3, count]= float(match[3])          # press
+        data[4, count]= float(match[4])          # Density
+        data[5, count]= float(match[5])          # Volume
+        data[6, count]= float(match[6])          # c_namsd[4]
+        data[7, count]= float(match[7])          # c_clmsd[4]
+        print(str(count)+"：step=" + match[0] + "   temp= " + match[1]+ "   press = " + match[3])
+        if count>2000:
+            sumtemp = float(sumtemp) + float(match[1])
+            sumpress = float(sumpress) + float(match[3])
+            sumvol = float(sumvol) + float(match[5])
+        if data[0, count]<= jump_step:
+            count=-1
+        #print(steps[0][count])
+data= data[:,0:count]                            # cut off excess 0s
+average_press = float(sumpress)/float(count-2000)
+average_temp = float(sumtemp)/float(count-2000)
+average_vol = float(sumvol)/float(count-2000)
+# 2000 is adjustable, to obtain more accurate mean value by cutting the beginning fluctuation
+
+#print('average temp is : '+str(average_temp))
+print(mean(data[1]))
+
+print('average press is : '+str(average_press))
+print(mean(data[3]))
+
+#print('average volume is : '+str(average_vol))
+print(mean(data[5]))
+
+#print(count)
+
+time= data[0]*0.001                # unit change to ps
+#data[3]= data[3]*0.001
+#print(time)
+time_scale_x = mean(time)          # not necessary, using for lable position
+time_scale_y_na = mean(data[6])    # not necessary, using for lable position
+time_scale_y_cl = mean(data[7])    # not necessary, using for lable position
+
+# plot
+
+fig= plt.figure()
+plt.subplot(231)          # split into 2 rows and 3 columns of small figures
+plt.plot(time,data[1],label='temp')
+#plt.annotate('average P = +str("%.2f" % mean(data[3])', xy=(0.05, 0.95), xycoords='axes fraction')
+plt.text(time_scale_x,200,'average T = '+str("%.1f" % mean(data[1])),fontsize=15)
+plt.legend()
+
+plt.subplot(232)
+plt.plot(time,data[2],label='PotEng')
+plt.legend()
+
+plt.subplot(233)
+plt.plot(time,data[3],label='press')
+#lables.append('average P = '+str("%.2f" % average_press)
+plt.text(time_scale_x,4000,'average P = '+str("%.2f" % mean(data[3])),fontsize=15)
+plt.legend()
+
+plt.subplot(234)
+plt.plot(time,data[4],label='Density')
+plt.legend()
+plt.subplot(235)
+plt.plot(time,data[5],label='Volume')
+plt.legend()
+
+plt.subplot(236)
+plt.plot(time,data[6],label='msd_na')
+plt.legend(loc='upper left')
+coeff_na = polyfit(time,data[6], 1)   # linear fit the msd data, coeff_na[0] is slope
+#print(coeff_na)
+plt.text(0,time_scale_y_na,'slope_na = '+str("%.3f" % coeff_na[0]))
+
+self_coff_na = coeff_na[0]/6
+print('msd_slope_na is : '+ str("%.4f"% coeff_na[0]))
+print('self_coff_na is : '+ str("%.4f"% self_coff_na))
+
+plt.plot(time, coeff_na[0] * time + coeff_na[1], 'k-')  # plot the fitting line
+
+plt.plot(time,data[7],label='msd_cl')
+plt.legend(loc='upper left')
+coeff_cl = polyfit(time,data[7], 1)
+#print(coeff_cl)
+plt.text(time_scale_x,time_scale_y_cl,'slope_cl = '+str("%.3f" % coeff_cl[0]))
+
+self_coff_cl = coeff_cl[0]/6
+print('msd_slope_cl is : '+ str("%.4f"% coeff_cl[0]))
+print('self_coff_cl is : '+ str("%.4f"% self_coff_cl))
+
+plt.plot(time,coeff_cl[0] * time + coeff_cl[1], 'k-')
+
+# calculate the conductivity
+
+Npair=36          # ion pairs number
+V=mean(data[5])   
+e=1.60219e-19
+kB=1.38065e-23    #boltzman constant
+T=mean(data[1])
+print(Npair)
+print(V)
+print(e)
+print(kB)
+print(T)
+
+conductivity = 1e22*(Npair*e**2*(self_coff_na+self_coff_cl)/(V*kB*T))
+#print(conductivity)
+print('conductivity is : '+ str("%.3f"% conductivity))
+
+#plt.xlabel('time(ps)')
+#plt.ylabel('temperature(K)')
+#plt.savefig('system_295to285.png')                 #save pics
+plt.show()
